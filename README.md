@@ -1,47 +1,69 @@
 # 北科圖書館閱覽室座位預約系統
 
-教學展示原型・非官方預約系統。這不是國立臺北科技大學的正式校務服務。
+保留 V1 原有視覺與 32 席預約流程，新增學號帳號註冊、登入、登出、Supabase 共用資料及多人預約安全設定。這是教學展示專案，並非北科大官方校務系統；目前沒有校方學籍核驗，因此知道學號的人仍可能嘗試註冊，正式校務用途前必須增加身分驗證。
 
-## 立即體驗（示範模式）
+## 專案內容
 
-1. 解壓縮專案。
-2. 直接開啟 `index.html`，或在專案資料夾執行 `python -m http.server 8000` 後瀏覽 `http://localhost:8000`。
-3. 示範預約儲存在該瀏覽器的 `localStorage`，重新整理仍會保留。不同瀏覽器／裝置不會同步，清除網站資料會清除示範紀錄。
+- `index.html`、`styles.css`、`app.js`：GitHub Pages 前端
+- `config.js`：只放 Supabase Project URL 與公開 anon/publishable key
+- `supabase-schema.sql`：資料表、RLS、唯一索引、座位狀態 RPC
+- `supabase/functions/register-student/index.ts`：安全建立學號帳號的 Edge Function
 
-## 部署至 GitHub Pages
+## Supabase 設定
 
-1. 將本資料夾內容推送到 GitHub repository 的根目錄。
-2. Repository → Settings → Pages → Deploy from a branch，選擇 `main` 與 `/ (root)`。
-3. 等待 GitHub Pages 發佈後，以 Pages 顯示的網址開啟。純靜態網站不需要 Node.js 伺服器。
-
-## 啟用共用正式資料（Supabase 免費方案可用，依供應商當期方案為準）
-
-1. 建立 Supabase 專案並確認專案的 Auth / Database 可用。
-2. 在 Supabase SQL Editor 執行 `supabase-schema.sql` 全部內容。
-3. 從 Project Settings / API 複製 Project URL 與 **anon/publishable key**，填入 `config.js`：
-
+1. 在 Supabase 建立專案。
+2. 開啟 SQL Editor，執行完整 `supabase-schema.sql`。
+3. 安裝 Supabase CLI，登入並在專案目錄連結專案：
+   ```bash
+   supabase login
+   supabase link --project-ref YOUR_PROJECT_REF
+   ```
+4. 部署註冊 Edge Function：
+   ```bash
+   supabase functions deploy register-student
+   ```
+   Supabase Edge Functions 執行環境通常會提供 `SUPABASE_URL` 與 `SUPABASE_SERVICE_ROLE_KEY`。若專案環境未提供，請在 Edge Function secrets 設定這兩個值。**服務角色金鑰只可放在 Supabase 伺服器端 secrets，絕不可放入 GitHub、`config.js` 或前端程式。**
+5. 在 Supabase Authentication 設定中，關閉 Email confirmation（此專案使用內部合成識別，不會寄送郵件）。使用者實際輸入的是學號，不是 Email。登入識別會在前端轉成 `學號@students.ntut.example.com`，此地址只供 Supabase Auth 內部使用。
+6. 從 Project Settings → API 複製 Project URL 與 **anon/publishable key**，填入 `config.js`：
    ```js
    window.SEAT_APP_CONFIG = {
      SUPABASE_URL: 'https://YOUR_PROJECT.supabase.co',
      SUPABASE_ANON_KEY: 'YOUR_PUBLIC_ANON_OR_PUBLISHABLE_KEY'
    };
    ```
+7. 在 Authentication URL Configuration 設定 Site URL 及 Redirect URLs 為實際 GitHub Pages 網址。雖然本流程不使用郵件驗證，仍建議設定正確的部署網址。
+8. 確認 Auth 密碼政策符合需求。前端不自行限制密碼長度或複雜度；Supabase Auth 的最低要求仍然適用。
 
-4. `config.js` 會部署到前端，因此只能放公開 anon/publishable key。**絕不可放 `service_role`、secret key 或資料庫密碼。**資料安全依靠 SQL 中的 RLS、資料庫唯一索引與 RPC。
-5. Supabase Authentication → Providers → Email 設定電子郵件登入／驗證政策。若啟用 email confirmation，使用者註冊後需完成信箱驗證再登入。正式站請設定 Site URL 及允許的 Redirect URLs 為 GitHub Pages 網址。
-6. 重新整理網站。設定完整時頂端會顯示「正式資料模式」，使用者需登入才能查看或修改自己的預約。座位可用狀態透過 RPC 取得，回傳內容只有座位代碼。
+## GitHub Pages 部署
 
-### 資料完整性與安全
+1. 將專案資料夾內的檔案與 `supabase/` 資料夾推送至 GitHub repository。
+2. 在 `config.js` 填入 Supabase URL 與公開 anon/publishable key。
+3. Repository → Settings → Pages → Deploy from a branch，選擇 `main` 與 `/ (root)`（或依你的 repository 目錄配置調整）。
+4. 開啟 GitHub Pages 網址，確認頂端顯示正式資料模式。尚未填入 Supabase 設定時，前端會回到本機示範模式；示範模式不支援跨裝置同步。
 
-- `seat_reservations_one_active_seat` 部分唯一索引確保相同日期、時段、座位最多一筆有效預約；即使兩個使用者同時送出，資料庫也只會接受其中一筆。
-- RLS 限制使用者只能讀取自己的預約、建立自己的預約、取消自己的有效預約。
-- `get_reserved_seats` 只回傳座位代碼，不回傳其他使用者的個資。
-- 取消會把狀態更新為 `cancelled`，唯一索引不再阻擋該座位。
-- 日期欄位與前端皆限制今天起 14 天；資料庫的日期 `CHECK` 以資料列寫入時的 `current_date` 判定。
+## 安全與多人同步
 
-## 已知限制
+- 學號格式在前端及 Edge Function 驗證：`^(?!000)[0-9]{9}$`。
+- `student_accounts.student_id` 有唯一約束，並由 Edge Function 使用服務角色建立；該表對 `anon` 與 `authenticated` 撤銷所有權限。
+- Auth 只儲存 Supabase 管理的密碼雜湊，不自行儲存明文密碼。
+- 預約 RLS 只允許使用者讀取、建立及取消自己的紀錄。
+- 部分唯一索引 `(reservation_date, time_slot, seat_code) WHERE status='active'` 是同時搶位的資料庫最終防線；前端預先檢查只是改善體驗。
+- 座位狀態 RPC 只回傳座位代碼，不暴露他人帳號或預約紀錄。
+- 預約畫面每 12 秒重新讀取座位狀態，預約／取消後也會立即刷新。資料在 Supabase，因此不同裝置使用同一專案時共用狀態。
 
-- 示範模式的 LocalStorage 檢查只在單一瀏覽器內有效，不是多人共用的競態安全資料庫。
-- 前端透過 CDN 載入 Supabase JS 與 Google Fonts；正式網路環境需能存取 CDN。若 CDN 不可用，基本示範頁面仍可載入，但雲端模式無法工作。
-- 本原型沒有校園單一登入、學生身分驗證、管理後台、到館簽到、逾時自動釋出或正式校務系統串接。
-- 請在正式使用前，由專案管理者檢視 SQL、RLS 與資料保留政策，並以真實部署網址做安全測試。
+## 測試狀態
+
+已執行靜態程式碼檢查與 JavaScript 語法檢查（見交付說明）。此執行環境沒有你的 Supabase 專案憑證與已部署的 GitHub Pages 網址，因此**未能實際完成**真實註冊／登入、兩帳號同時搶位、跨裝置同步等整合測試。部署後請依序驗證：
+
+1. 註冊合法學號；測試 `000123456`、字母、少於 9 位應被拒絕。
+2. 重複註冊同一學號應回覆已註冊；登出後用學號與密碼登入。
+3. 兩個不同帳號同時預約相同日期、時段、座位，只能有一筆成功。
+4. 取消預約後另一帳號應能重新預約同一座位。
+5. 用不同瀏覽器或裝置登入，確認座位狀態及個人預約可跨裝置保存；帳號 A 不應看見帳號 B 的個人紀錄。
+
+## 限制與注意事項
+
+- 這不是北科大官方服務，沒有連接校方學籍資料；學號格式正確不代表已驗證學生身分。
+- Edge Function 對公開註冊端點應再配合 Supabase Auth 限流、監控及濫用防護。學號本身不是秘密，也不應當作身分驗證的唯一證明。
+- 目前使用 12 秒輪詢更新座位狀態，而非即時推播；多人狀態會更新，但可能有短暫延遲。唯一索引可防止重複預約。
+- Supabase 免費方案限制與政策可能變動，請以供應商當期文件為準。
